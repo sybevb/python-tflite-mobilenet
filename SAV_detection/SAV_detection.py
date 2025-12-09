@@ -50,7 +50,7 @@ def load_classes(classes_path):
 
 
 class InferenceDataFactory(GstRtspServer.RTSPMediaFactory):
-    def __init__(self, model_path, classes, device=0, width=1280, height=720, framerate=30):
+    def __init__(self, model_path, classes, device=0, width=1280, height=720, framerate=30, reg_labels=None):
         super(InferenceDataFactory, self).__init__()
         self.model_path = model_path
         self.classes = classes
@@ -122,6 +122,26 @@ class InferenceDataFactory(GstRtspServer.RTSPMediaFactory):
         print(f"Input size: {self.input_size}, dtype: {self.input_type}")
         print(f"Num classes: {self.num_classes}, Num regressors: {self.num_regressors}")
 
+        # Parse user-provided regressor labels (from CLI) if given
+        self.reg_labels = None
+        if reg_labels is not None:
+            if isinstance(reg_labels, str):
+                self.reg_labels = [s.strip() for s in reg_labels.split(',') if s.strip()]
+            elif isinstance(reg_labels, (list, tuple)):
+                self.reg_labels = list(reg_labels)
+
+        # Fallback heuristics for regressor labels:
+        # - If number of regressors equals number of classes, assume same labels
+        # - If exactly 3 regressors and no labels provided, use the requested defaults
+        # - Otherwise label as R0, R1, ...
+        if self.reg_labels is None:
+            if self.num_regressors == self.num_classes and self.num_regressors > 0:
+                self.reg_labels = list(self.classes)
+            elif self.num_regressors == 3:
+                self.reg_labels = ["Dirty Lens", "Spray", "Under water"]
+            else:
+                self.reg_labels = [f"R{i}" for i in range(self.num_regressors)]
+
     def on_need_data(self, src, length):
         if not self.cap.isOpened():
             return
@@ -189,8 +209,12 @@ class InferenceDataFactory(GstRtspServer.RTSPMediaFactory):
 
         if regs is not None and len(regs) > 0:
             for i, val in enumerate(regs[:10]):
-                # show up to 10 regressors
-                cv2.putText(frame_disp, f"R{i}: {float(val):.3f}", (x, y + 60 + i * 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                # show up to 10 regressors with human-readable labels when available
+                if i < len(self.reg_labels):
+                    label = self.reg_labels[i]
+                else:
+                    label = f"R{i}"
+                cv2.putText(frame_disp, f"{label}: {float(val):.3f}", (x, y + 60 + i * 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
         # Put inference time
         cv2.putText(frame_disp, f"Inf: {(t1 - t0) * 1000:.1f} ms", (self.width - 200, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 1)
@@ -235,6 +259,7 @@ def parse_args():
     p.add_argument('--checkpoint', '-c', default=DEFAULT_CHECKPOINT, help='Checkpoint folder containing model and classes.json')
     p.add_argument('--model', '-m', default='model.tflite', help='TFLite model filename inside checkpoint folder')
     p.add_argument('--classes', '-l', default='classes.json', help='Classes JSON filename inside checkpoint folder')
+    p.add_argument('--reglabels', '-r', default=None, help='Comma-separated regressor labels (e.g. "Dirty Lens,Under water,Spray")')
     p.add_argument('--device', '-d', default=0, help='Camera device (index or path)')
     p.add_argument('--width', '-x', default=1280, help='Stream width')
     p.add_argument('--height', '-y', default=720, help='Stream height')
@@ -255,7 +280,8 @@ if __name__ == '__main__':
 
     Gst.init(None)
     factory = InferenceDataFactory(model_path=checkpoint_dir, classes=classes, device=args.device,
-                                   width=args.width, height=args.height, framerate=args.framerate)
+                                   width=args.width, height=args.height, framerate=args.framerate,
+                                   reg_labels=args.reglabels)
 
     server = RtspServer(factory)
     print('RTSP stream ready at rtsp://<this-host>:8554/stream')
