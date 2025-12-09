@@ -46,8 +46,8 @@ EXPERIMENT_NAME = "TF_SAV_MobileNet_MTL"
 CHECKPOINT_DIR = f"checkpoints_{EXPERIMENT_NAME}"
 os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
-BATCH_SIZE = 64
-EPOCHS = 30
+BATCH_SIZE = 256
+EPOCHS = 1
 LR = 3e-4
 TARGET_SIZE = 224
 BACKBONE_NAME = "mobilenet_v2"   # or "mobilenet_v3"
@@ -209,20 +209,21 @@ def main():
         }
     )
 
-    # Train
-    model.fit(
-        train_ds,
-        validation_data=val_ds,
-        epochs=EPOCHS,
-    )
+    # # Train
+    # model.fit(
+    #     train_ds,
+    #     validation_data=val_ds,
+    #     epochs=EPOCHS,
+    # )
 
     # Save best model
-    model.save(os.path.join(CHECKPOINT_DIR, "model.keras"))
+    # model.save(os.path.join(CHECKPOINT_DIR, "model.keras"))
 
     # ============================================================
     # Export TFLite Model
     # ============================================================
-    converter = tf.lite.TFLiteConverter.from_saved_model(os.path.join(CHECKPOINT_DIR, "model.keras"))
+    trained_model = tf.keras.models.load_model("checkpoints_TF_SAV_MobileNet_MTL\model.keras") #os.path.join(CHECKPOINT_DIR, "model.keras"))
+    converter = tf.lite.TFLiteConverter.from_keras_model(trained_model) #os.path.join(CHECKPOINT_DIR, "model.keras"))
     tflite_model = converter.convert()
 
     with open(os.path.join(CHECKPOINT_DIR, "model.tflite"), "wb") as f:
