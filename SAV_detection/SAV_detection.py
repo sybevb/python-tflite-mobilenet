@@ -16,6 +16,7 @@ the annotated frames over RTSP at rtsp://<host>:8554/stream
 
 import os
 import sys
+import time
 import json
 import argparse
 import time
@@ -63,12 +64,33 @@ class InferenceDataFactory(GstRtspServer.RTSPMediaFactory):
         self.duration = (1.0 / self.framerate) * Gst.SECOND
 
         # Video capture (use CAP_DSHOW on Windows for better compatibility)
-        self.cap = cv2.VideoCapture(
-            f'v4l2src device=/dev/video0 extra-controls="controls,horizontal_flip=0,vertical_flip=0" '
+        # --- Robust camera open with retry (required for boot-time startup) ---
+        device = self.device if isinstance(self.device, str) else f"/dev/video{self.device}"
+
+        pipeline = (
+            f'v4l2src device={device} '
             f'! video/x-raw,width={self.width},height={self.height},framerate={self.framerate}/1 '
-            f'! imxvideoconvert_g2d ! video/x-raw,format=BGRA ! appsink',
-            cv2.CAP_GSTREAMER
+            f'! imxvideoconvert_g2d '
+            f'! video/x-raw,format=BGRA '
+            f'! appsink drop=true max-buffers=1'
         )
+
+        self.cap = None
+
+        for attempt in range(60):
+            print(f"[CAMERA] Opening attempt {attempt + 1}/60")
+            cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+            if cap.isOpened():
+                self.cap = cap
+                print("[CAMERA] Camera opened successfully")
+                break
+            time.sleep(1)
+
+        if self.cap is None:
+            print("[CAMERA] Failed to open camera, exiting so systemd can restart us")
+            sys.exit(1)
+        # ---------------------------------------------------------------
+
 
 
         # GStreamer launch string - use BGRA to match numpy's channels ordering
