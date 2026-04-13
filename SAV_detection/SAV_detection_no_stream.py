@@ -16,6 +16,10 @@ import argparse
 import time
 import numpy as np
 import cv2
+import csv
+import datetime
+import signal
+import atexit
 
 try:
     import tflite_runtime.interpreter as tflite
@@ -121,6 +125,48 @@ def main():
     # ---------------------------------------------------------
     # Open camera (NO GStreamer pipeline, raw V4L2)
     # ---------------------------------------------------------
+    # Prepare shutdown-safe logger before opening camera
+    logs_dir = os.path.join(CUR_PATH, 'logs')
+    try:
+        os.makedirs(logs_dir, exist_ok=True)
+    except Exception:
+        pass
+
+    # find next numeric index
+    existing = [f for f in os.listdir(logs_dir) if f.startswith('log_') and f.endswith('.csv')]
+    max_idx = 0
+    for f in existing:
+        try:
+            num = int(f[4:8])
+            if num > max_idx:
+                max_idx = num
+        except Exception:
+            continue
+    next_idx = max_idx + 1
+    log_fname = f"log_{next_idx:04d}.csv"
+    log_path = os.path.join(logs_dir, log_fname)
+
+    log_file = None
+    log_writer = None
+    try:
+        log_file = open(log_path, 'w', newline='', encoding='utf-8')
+        log_writer = csv.writer(log_file)
+        header = ['timestamp', 'class', 'prob']
+        for i in range(num_reg):
+            header.append(f'reg_{i}')
+        log_writer.writerow(header)
+        log_file.flush()
+        try:
+            os.fsync(log_file.fileno())
+        except Exception:
+            pass
+        print(f"[LOG] Writing inference logs to {log_path}")
+    except Exception as e:
+        print('[LOG] Failed to create log file:', e)
+        log_file = None
+        log_writer = None
+
+    # camera open
     print("Opening camera:", args.device)
 
     cap = cv2.VideoCapture(args.device)
@@ -133,6 +179,54 @@ def main():
         sys.exit(1)
 
     print("Camera opened. Press Ctrl+C to stop.\n")
+
+    # Close logger and release camera (for atexit / signal handlers)
+    def close_logger():
+        try:
+            if log_file is not None:
+                try:
+                    log_file.flush()
+                    os.fsync(log_file.fileno())
+                except Exception:
+                    pass
+                try:
+                    log_file.close()
+                except Exception:
+                    pass
+                print(f"[LOG] Closed log file {log_path}")
+        except Exception:
+            pass
+
+        try:
+            if cap is not None:
+                try:
+                    cap.release()
+                    print("[CAMERA] Released camera")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    try:
+        atexit.register(close_logger)
+    except Exception:
+        pass
+
+    def _signal_handler(signum, frame):
+        print(f"[MAIN] Signal {signum} received, shutting down")
+        close_logger()
+        try:
+            sys.exit(0)
+        except Exception:
+            os._exit(0)
+
+    for s in (getattr(signal, 'SIGINT', None), getattr(signal, 'SIGTERM', None)):
+        if s is None:
+            continue
+        try:
+            signal.signal(s, _signal_handler)
+        except Exception:
+            pass
 
     # ---------------------------------------------------------
     # Main loop — inference + logging
@@ -211,6 +305,29 @@ def main():
 
         # Small sleep to avoid spamming console too fast
         time.sleep(0.01)
+        
+        # Write CSV log row (timestamp, class, prob, regressors)
+        try:
+            if log_writer is not None:
+                ts = datetime.datetime.utcnow().isoformat() + 'Z'
+                row = [ts, pred_class, f"{pred_prob:.6f}"]
+                if regs is not None and len(regs) > 0:
+                    for i in range(num_reg):
+                        try:
+                            row.append(f"{float(regs[i]):.6f}")
+                        except Exception:
+                            row.append('')
+                else:
+                    for i in range(num_reg):
+                        row.append('')
+                log_writer.writerow(row)
+                log_file.flush()
+                try:
+                    os.fsync(log_file.fileno())
+                except Exception:
+                    pass
+        except Exception as e:
+            print('[LOG] Failed to write log row:', e)
 
 
 if __name__ == "__main__":

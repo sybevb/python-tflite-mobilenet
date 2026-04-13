@@ -10,8 +10,8 @@ python3 SAV_detection.py --checkpoint models --model model.tflite --classes clas
 
 This script follows the RTSP appsrc pattern used in `object-detection.py`.
 It loads `model.tflite` and `classes.json`, runs inference on camera frames,
-draws the predicted class and regression scalars on each frame, and streams
 the annotated frames over RTSP at rtsp://<host>:8554/stream
+draws the predicted class and regression scalars on each frame, and streams
 """
 
 import os
@@ -22,6 +22,10 @@ import argparse
 import time
 import numpy as np
 import cv2
+import csv
+import datetime
+import signal
+import atexit
 
 try:
     import tflite_runtime.interpreter as tflite
@@ -164,6 +168,44 @@ class InferenceDataFactory(GstRtspServer.RTSPMediaFactory):
             else:
                 self.reg_labels = [f"R{i}" for i in range(self.num_regressors)]
 
+        # --- Logging: create per-run numbered CSV log file in `logs/` ---
+        try:
+            logs_dir = os.path.join(CUR_PATH, 'logs')
+            os.makedirs(logs_dir, exist_ok=True)
+
+            # Find next index by scanning existing files named log_####.csv
+            existing = [f for f in os.listdir(logs_dir) if f.startswith('log_') and f.endswith('.csv')]
+            max_idx = 0
+            for f in existing:
+                try:
+                    num = int(f[4:8])
+                    if num > max_idx:
+                        max_idx = num
+                except Exception:
+                    continue
+            next_idx = max_idx + 1
+            fname = f"log_{next_idx:04d}.csv"
+            self.log_path = os.path.join(logs_dir, fname)
+
+            # Open log file and write header
+            self.log_file = open(self.log_path, 'w', newline='', encoding='utf-8')
+            self.log_writer = csv.writer(self.log_file)
+            # Build header: timestamp, class, prob, reg_0..reg_N
+            header = ['timestamp', 'class', 'prob']
+            for i in range(self.num_regressors):
+                header.append(f'reg_{i}')
+            self.log_writer.writerow(header)
+            self.log_file.flush()
+            try:
+                os.fsync(self.log_file.fileno())
+            except Exception:
+                pass
+            print(f"[LOG] Writing inference logs to {self.log_path}")
+        except Exception as e:
+            print("[LOG] Failed to create log file:", e)
+            self.log_file = None
+            self.log_writer = None
+
     def on_need_data(self, src, length):
         if not self.cap.isOpened():
             return
@@ -256,6 +298,57 @@ class InferenceDataFactory(GstRtspServer.RTSPMediaFactory):
         if retval != Gst.FlowReturn.OK:
             print('push-buffer returned', retval)
 
+        # Log model outputs (timestamp, label, prob, regressors)
+        try:
+            if getattr(self, 'log_writer', None) is not None:
+                ts = datetime.datetime.utcnow().isoformat() + 'Z'
+                row = [ts, pred_label, f"{pred_prob:.6f}"]
+                if regs is not None and len(regs) > 0:
+                    for i in range(self.num_regressors):
+                        try:
+                            row.append(f"{float(regs[i]):.6f}")
+                        except Exception:
+                            row.append('')
+                else:
+                    # fill empty regressors
+                    for i in range(self.num_regressors):
+                        row.append('')
+                self.log_writer.writerow(row)
+                self.log_file.flush()
+                try:
+                    os.fsync(self.log_file.fileno())
+                except Exception:
+                    pass
+        except Exception as e:
+            print('[LOG] Failed to write log row:', e)
+
+    def close_logger(self):
+        try:
+            if getattr(self, 'log_file', None):
+                try:
+                    self.log_file.flush()
+                    os.fsync(self.log_file.fileno())
+                except Exception:
+                    pass
+                try:
+                    self.log_file.close()
+                except Exception:
+                    pass
+                print(f"[LOG] Closed log file {getattr(self, 'log_path', '<unknown>')}")
+        except Exception:
+            pass
+
+        # Also release camera if open
+        try:
+            if getattr(self, 'cap', None) is not None:
+                try:
+                    self.cap.release()
+                    print("[CAMERA] Released camera")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     def do_create_element(self, url):
         return Gst.parse_launch(self.launch_string)
 
@@ -306,6 +399,33 @@ if __name__ == '__main__':
                                    reg_labels=args.reglabels)
 
     server = RtspServer(factory)
-    print('RTSP stream ready at rtsp://<this-host>:8554/stream')
+    print('RTSP stream ready at rtsp://scailx-ai.local:8554/stream')
     loop = GLib.MainLoop()
+    # Ensure logger is closed on normal exit
+    try:
+        atexit.register(factory.close_logger)
+    except Exception:
+        pass
+
+    # Signal handlers to gracefully stop the GLib loop and close logger
+    def _stop(signum, frame):
+        print(f"[MAIN] Signal {signum} received, shutting down")
+        try:
+            factory.close_logger()
+        except Exception:
+            pass
+        try:
+            loop.quit()
+        except Exception:
+            pass
+
+    for s in (getattr(signal, 'SIGINT', None), getattr(signal, 'SIGTERM', None)):
+        if s is None:
+            continue
+        try:
+            signal.signal(s, _stop)
+        except Exception:
+            # Some platforms (e.g., certain GLib integrations) may not allow overriding signals
+            pass
+
     loop.run()
