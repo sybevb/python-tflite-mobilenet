@@ -1,0 +1,14 @@
+{
+  "split": "ground_truth",
+  "samples": 1000,
+  "bad_images": 0,
+  "threshold": 0.5,
+  "f1_macro": 0.6218618926644357,
+  "f2_macro": 0.6354339607472983,
+  "acc_like": 0.771,
+  "scalar_mae": 0.0,
+  "scalar_rmse": 0.0,
+  "ordinal_acc": 0.753,
+  "ordinal_mae": 0.37033333333333335,
+  "mean_inference_ms": 1.2524559497833252
+}

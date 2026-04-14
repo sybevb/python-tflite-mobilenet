@@ -1,0 +1,55 @@
+{
+  "format": "savh2_tflite_v1",
+  "classes": [
+    "Pipe",
+    "Test_footage",
+    "No_view",
+    "Off_pipe",
+    "Manhole"
+  ],
+  "scalars": [],
+  "ordinals": [
+    "Dirty_lens",
+    "Spray",
+    "Under_water"
+  ],
+  "ordinal_bins": {
+    "Dirty_lens": 4,
+    "Spray": 4,
+    "Under_water": 4
+  },
+  "input_size": 192,
+  "threshold": 0.5,
+  "flat_output_size": 17,
+  "offsets": {
+    "classes": [
+      0,
+      5
+    ],
+    "scalars": [
+      5,
+      5
+    ],
+    "ordinals": {
+      "Dirty_lens": [
+        5,
+        9
+      ],
+      "Spray": [
+        9,
+        13
+      ],
+      "Under_water": [
+        13,
+        17
+      ]
+    }
+  },
+  "output_order": [
+    "classes",
+    "scalars",
+    "ordinal_Dirty_lens",
+    "ordinal_Spray",
+    "ordinal_Under_water"
+  ]
+}

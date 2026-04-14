@@ -3,3 +3,9 @@ pandas
 numpy
 pillow
 tqdm
+opencv-python
+
+# Optional for lightweight runtime-only deployments.
+# The SAVH2 runtime falls back to tensorflow.lite.Interpreter when this is absent.
+# Install manually on platforms where a matching wheel exists:
+# tflite-runtime
